@@ -22,13 +22,25 @@
 |---|---|---|
 | 函数内某行 | `相对路径 函数：Foo 偏移：+N`（`+0` = 函数签名行，偏移 = 目标行 − 签名行） | `src/cli.ts 函数：createCli 偏移：+83` |
 | 连续片段 | `Foo+0~+20` | `runEntrypoint+2~+13` |
-| 非函数代码（类型/常量/顶层语句） | `Const：X` / `Type：X` / `Module：xxx` | `src/identity.ts Const：PRODUCT_IDENTITY` |
+| 非函数代码（类型/常量/顶层语句） | `Const：X` / `Type：X` / `Class：X` / `Struct：X` / `Module：xxx` | `src/identity.ts Const：PRODUCT_IDENTITY` |
+| 私有方法/字段 | `函数：#name 偏移：+N`（`#` 是同一个词法单元） | `src/application/investigation/EvidenceLedger.ts 函数：#commit 偏移：+0` |
 | 调用关系 | 标双方 | `调用方 run+96 ↓ 被调用方 parseConfig` |
 | 第三方依赖 | 注明包名 | `依赖：incur`、`依赖：@modelcontextprotocol/server` |
 
 **文末源码索引**是唯一的例外，允许 `文件:符号:绝对行号`，方便编辑器跳转复核；但该行的「符号」必须真实存在，绝对行号只作便利用途、不作论据。
 
 校验方法（写完必跑）：正文里每个 `函数：Foo` 的 `Foo` 必须能在对应文件 grep 到；偏移必须落在该函数体内（`目标行 − 签名行`）。
+
+### 2.1 锚点绑定细则（实测过的坑）
+
+- **文件与符号必须在同一个 code span 内、且间隔 ≤6 个字符**（例如 `src/x.ts 函数：Foo`）。跨句号、分号、顿号或更长的中文描述后写 `函数：Foo`，校验器会把它当成**裸锚点**，只检查「符号在别处存在」，不检查文件与偏移。
+- **`文件 偏移：+N`（没有符号）是非法写法**，校验器报 `anchor-without-symbol`；要么补 `函数：`/`Const：`，要么删掉偏移。
+- **命名锚点可以自带文件**：`路径 Class：X`、`路径 Type：X`、`路径 Const：X` 会被逐一解析；文件写错或符号不在该文件会报 `named-anchor-missing`，不会静默通过。
+- **`Module：<路径>`** 只表示「整份文件」，不参与函数体偏移校验；适合引用没有导出符号的脚本、Python 入口、Mermaid 文件。
+- **Python**：`def name(`、`class Name`、模块级 `NAME = ...` 都能被识别；缩进体按「下一个同级或更浅行」估算。
+- **Java / C++ / Node-API**：最多三个修饰符/返回类型 token 加方法名的声明能识别；`if (`、`return x(` 等控制流/调用行不会被当作声明。
+- **跨行签名 + 泛型返回值可能漏检**：例如方法签名的 `{` 在 `): Result<` 之后好几行才出现，校验器无法确认「这是定义」，会报 `symbol-not-found`。此时改锚定同类中的顶层函数、私有辅助函数或 `Class：`，不要为了过检查而伪造偏移。
+- **不要用裸行号兜底**。行号会漂移；需要指「某一行」时，写最近的符号 + 偏移，或写 `路径` + 字段/常量名，让读者自己跳转。
 
 ## 3. 事实分级：四级标注
 
@@ -97,7 +109,9 @@ node docs/adrian/sourceReader/tools/anchor-check.mjs docs/adrian/sourceReader
 
 - **不检查 `00-` 自身**（本篇里的 `Const：X` 是模板占位符，不是锚点）。
 - 函数体范围靠**括号/缩进启发式**估算，遇到跨行参数列表里的对象字面量可能估错，报 `offset-out-of-body` 时要人工确认再改文档。
-- 短锚点的退化判据只保证「这个名字存在」，不保证「在这段代码里」—— 报告里出现 `short-anchor-unknown-symbol` 一定是编造，出现其它类别时仍需人工回读。
+- 短锚点的退化判据只保证「这个名字存在」，不保证「在这段代码里」—— 报告里出现 `short-anchor-unknown-symbol` / `bare-anchor-unknown-symbol` 一定是编造或未绑定文件，出现其它类别时仍需人工回读。
+- 见 `named-anchor-missing`、`anchor-without-symbol`、`bare-anchor-unknown-symbol` 时按 §2.1 修，不要靠删锚点「消错」。
+- **必须跑正对照**：校验器在「一个匹配都没找到」时也会打印 `issues: 0`，那是假绿。用一份故意写错的样本（不存在文件、错误符号、错误偏移）确认它真的会报错，再相信正式文档的 0。
 
 ## 8. 仓库特有的口径约定
 
